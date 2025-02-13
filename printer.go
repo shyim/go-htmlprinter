@@ -16,28 +16,43 @@ type writer interface {
 	WriteString(string) (int, error)
 }
 
-var plaintextAbort = errors.New("html: internal error (plaintext abort)")
+var errPlaintextAbort = errors.New("html: internal error (plaintext abort)")
 
 func Render(w io.Writer, n *html.Node) error {
+	filter := func(*html.Node) bool {
+		return false
+	}
+
 	if x, ok := w.(writer); ok {
-		return render(x, n)
+		return render(x, n, filter)
 	}
 	buf := bufio.NewWriter(w)
-	if err := render(buf, n); err != nil {
+	if err := render(buf, n, filter); err != nil {
 		return err
 	}
 	return buf.Flush()
 }
 
-func render(w writer, n *html.Node) error {
-	err := render1(w, n)
-	if err == plaintextAbort {
+func RenderButSkipElements(w io.Writer, n *html.Node, filter func(*html.Node) bool) error {
+	if x, ok := w.(writer); ok {
+		return render(x, n, filter)
+	}
+	buf := bufio.NewWriter(w)
+	if err := render(buf, n, filter); err != nil {
+		return err
+	}
+	return buf.Flush()
+}
+
+func render(w writer, n *html.Node, filter func(*html.Node) bool) error {
+	err := render1(w, n, filter)
+	if err == errPlaintextAbort {
 		err = nil
 	}
 	return err
 }
 
-func render1(w writer, n *html.Node) error {
+func render1(w writer, n *html.Node, filter func(*html.Node) bool) error {
 	// Render non-element nodes; these are the easy cases.
 	switch n.Type {
 	case html.ErrorNode:
@@ -46,7 +61,7 @@ func render1(w writer, n *html.Node) error {
 		return escape(w, n.Data)
 	case html.DocumentNode:
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			if err := render1(w, c); err != nil {
+			if err := render1(w, c, filter); err != nil {
 				return err
 			}
 		}
@@ -113,47 +128,51 @@ func render1(w writer, n *html.Node) error {
 		return errors.New("html: unknown node type")
 	}
 
-	// Render the <xxx> opening tag.
-	if err := w.WriteByte('<'); err != nil {
-		return err
-	}
-	if _, err := w.WriteString(n.Data); err != nil {
-		return err
-	}
-	for _, a := range n.Attr {
-		if err := w.WriteByte(' '); err != nil {
+	skipIt := filter(n)
+
+	if !skipIt {
+		// Render the <xxx> opening tag.
+		if err := w.WriteByte('<'); err != nil {
 			return err
 		}
-		if a.Namespace != "" {
-			if _, err := w.WriteString(a.Namespace); err != nil {
+		if _, err := w.WriteString(n.Data); err != nil {
+			return err
+		}
+		for _, a := range n.Attr {
+			if err := w.WriteByte(' '); err != nil {
 				return err
 			}
-			if err := w.WriteByte(':'); err != nil {
+			if a.Namespace != "" {
+				if _, err := w.WriteString(a.Namespace); err != nil {
+					return err
+				}
+				if err := w.WriteByte(':'); err != nil {
+					return err
+				}
+			}
+			if _, err := w.WriteString(a.Key); err != nil {
+				return err
+			}
+			if _, err := w.WriteString(`="`); err != nil {
+				return err
+			}
+			if err := escapeAttr(w, a.Val); err != nil {
+				return err
+			}
+			if err := w.WriteByte('"'); err != nil {
 				return err
 			}
 		}
-		if _, err := w.WriteString(a.Key); err != nil {
+		if voidElements[n.Data] {
+			if n.FirstChild != nil {
+				return fmt.Errorf("html: void element <%s> has child nodes", n.Data)
+			}
+			_, err := w.WriteString("/>")
 			return err
 		}
-		if _, err := w.WriteString(`="`); err != nil {
+		if err := w.WriteByte('>'); err != nil {
 			return err
 		}
-		if err := escapeAttr(w, a.Val); err != nil {
-			return err
-		}
-		if err := w.WriteByte('"'); err != nil {
-			return err
-		}
-	}
-	if voidElements[n.Data] {
-		if n.FirstChild != nil {
-			return fmt.Errorf("html: void element <%s> has child nodes", n.Data)
-		}
-		_, err := w.WriteString("/>")
-		return err
-	}
-	if err := w.WriteByte('>'); err != nil {
-		return err
 	}
 
 	// Add initial newline where there is danger of a newline beging ignored.
@@ -174,7 +193,7 @@ func render1(w writer, n *html.Node) error {
 					return err
 				}
 			} else {
-				if err := render1(w, c); err != nil {
+				if err := render1(w, c, filter); err != nil {
 					return err
 				}
 			}
@@ -182,24 +201,28 @@ func render1(w writer, n *html.Node) error {
 		if n.Data == "plaintext" {
 			// Don't render anything else. <plaintext> must be the
 			// last element in the file, with no closing tag.
-			return plaintextAbort
+			return errPlaintextAbort
 		}
 	} else {
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			if err := render1(w, c); err != nil {
+			if err := render1(w, c, filter); err != nil {
 				return err
 			}
 		}
 	}
 
-	// Render the </xxx> closing tag.
-	if _, err := w.WriteString("</"); err != nil {
-		return err
+	if !skipIt {
+		// Render the </xxx> closing tag.
+		if _, err := w.WriteString("</"); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(n.Data); err != nil {
+			return err
+		}
+		return w.WriteByte('>')
 	}
-	if _, err := w.WriteString(n.Data); err != nil {
-		return err
-	}
-	return w.WriteByte('>')
+
+	return nil
 }
 
 func childTextNodesAreLiteral(n *html.Node) bool {
