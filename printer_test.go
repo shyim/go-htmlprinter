@@ -25,6 +25,10 @@ func TestEscapingInAttributes(t *testing.T) {
 			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"/></head><body></body></html>`,
 			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"/></head><body></body></html>`,
 		},
+		{
+			`<strong>{{ $tc('sw-product.detailBase.bundleVirtualAvailability') }}</strong>`,
+			`<html><head></head><body><strong>{{ $tc('sw-product.detailBase.bundleVirtualAvailability') }}</strong></body></html>`,
+		},
 	}
 
 	for _, c := range cases {

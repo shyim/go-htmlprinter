@@ -58,7 +58,7 @@ func render1(w writer, n *html.Node, filter func(*html.Node) bool) error {
 	case html.ErrorNode:
 		return errors.New("html: cannot render an ErrorNode node")
 	case html.TextNode:
-		return escape(w, n.Data)
+		return escapeAttr(w, n.Data)
 	case html.DocumentNode:
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			if err := render1(w, c, filter); err != nil {
